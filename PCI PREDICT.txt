@@ -1,0 +1,370 @@
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error, mean_absolute_percentage_error
+import tensorflow as tf
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, Dropout, LeakyReLU
+from sklearn.preprocessing import MinMaxScaler, OneHotEncoder
+import warnings
+from math import sqrt
+from tensorflow.keras.callbacks import EarlyStopping
+import matplotlib.pyplot as plt
+import seaborn as sns  # For enhanced plotting
+
+warnings.filterwarnings('ignore', category=UserWarning)
+
+# Function to evaluate regression metrics
+def evaluate_regression(y_true, y_pred, process_name):
+    mse = mean_squared_error(y_true, y_pred)
+    rmse = sqrt(mse)
+    mae = mean_absolute_error(y_true, y_pred)
+    mape = mean_absolute_percentage_error(y_true, y_pred)
+    r2 = r2_score(y_true, y_pred)
+    return {
+        "Process": process_name,
+        "MSE": mse,
+        "RMSE": rmse,
+        "MAE": mae,
+        "R2": r2
+    }
+
+# Load data
+try:
+    data = pd.read_excel(r"d.xlsx")
+except FileNotFoundError:
+    print("Error: datas.xlsx not found. Please ensure the file exists in the current directory or the specified path.")
+    exit()
+
+X = data.iloc[:, :-1]
+y = data.iloc[:, -1].values
+
+# Preprocess data
+categorical_features = X.select_dtypes(include=['object']).columns
+encoder = OneHotEncoder(sparse_output=False, handle_unknown='ignore')
+encoded_features = encoder.fit_transform(X[categorical_features])
+encoded_df = pd.DataFrame(encoded_features, columns=encoder.get_feature_names_out(categorical_features))
+X = X.drop(columns=categorical_features)
+X = pd.concat([X, encoded_df], axis=1)
+X = X.values
+
+# Normalize data instead of standardizing
+scaler_X = MinMaxScaler()
+scaler_y = MinMaxScaler()
+X = scaler_X.fit_transform(X)
+y = scaler_y.fit_transform(y.reshape(-1, 1)).flatten()
+
+
+# Split data into train, validation, and test sets
+X_train, X_temp, y_train, y_temp = train_test_split(X, y, test_size=0.30, random_state=42)
+X_val, X_test, y_val, y_test = train_test_split(X_temp, y_temp, test_size=0.5, random_state=42) # 15% validation, 15% test
+
+
+# Define model builder with additional flexibility
+def build_model(hidden_layers, activation_funcs, dropout_rate=0.0):
+    print("hidden layers   ", hidden_layers)
+    print("activation_funcs   ", activation_funcs)
+    model = Sequential()
+    if activation_funcs[0] == 'leakyrelu':
+        model.add(Dense(hidden_layers[0], input_dim=X.shape[1]))
+        model.add(LeakyReLU(alpha=0.01))  # Leaky ReLU with alpha=0.01
+    else:
+        model.add(Dense(hidden_layers[0], activation=activation_funcs[0], input_dim=X.shape[1]))
+    if dropout_rate > 0:
+        model.add(Dropout(dropout_rate))
+    for units, activation_func in zip(hidden_layers[1:], activation_funcs[1:]):
+        if activation_func == 'leakyrelu':
+            model.add(Dense(units))
+            model.add(LeakyReLU(alpha=0.01))  # Leaky ReLU with alpha=0.01
+        else:
+            model.add(Dense(units, activation=activation_func))
+        if dropout_rate > 0:
+            model.add(Dropout(dropout_rate))
+    model.add(Dense(1, activation='linear'))
+    print("model   ", model.summary())
+    return model
+
+# Get User Input for Model Configuration
+while True:
+    number_of_hidden_layers_input = input("Enter the number of hidden layers: ")
+    if number_of_hidden_layers_input == '':
+        number_of_hidden_layers = 2
+        break
+    try:
+        number_of_hidden_layers = int(number_of_hidden_layers_input)
+        if number_of_hidden_layers <= 0:
+           print("Number of hidden layers must be a positive integer.")
+        else:
+            break
+    except ValueError:
+        print("Invalid input. Please enter a valid integer.")
+print("number of layers   ", number_of_hidden_layers)
+
+neurons_per_layer = []
+activation_functions = []
+for i in range(number_of_hidden_layers):
+    while True:
+        units_input = input(f"Enter the number of neurons for hidden layer {i+1}: ")
+        if units_input == '':
+            units = 128
+            break
+        try:
+            units = int(units_input)
+            if units <= 0:
+                print("Number of neurons must be a positive integer.")
+            else:
+                break
+        except ValueError:
+            print("Invalid input. Please enter a valid integer.")
+
+    neurons_per_layer.append(units)
+    while True:
+      activation_function = input(f"Enter the activation function for hidden layer {i+1} (relu, tanh, elu, mish, leakyrelu): ").lower()
+      if activation_function in ["relu", "tanh", "elu", "mish", "leakyrelu"]:
+          activation_functions.append(activation_function)
+          break
+      else:
+          print("Invalid activation function. Please choose from relu, tanh, elu, mish or leakyrelu.")
+
+#epochs = int(input("Enter the number of epochs for training: "))
+#learning_rate = float(input("Enter the learning rate (e.g., 0.001): "))
+#batch_size = int(input("Enter the batch size (e.g., 32): "))
+#dropout_rate = float(input("Enter dropout rate between 0 and 0.5 (or 0 for no dropout): "))
+
+epochs = 1000
+learning_rate = 0.001
+batch_size = 32
+dropout_rate = 0.01
+
+# Optimizer selection
+while True:
+    optimizer_choice = input("Choose an optimizer (adam, adamax, nadam, sgd): ").lower()
+    if optimizer_choice in ["adam", "adamax", "nadam", "sgd"]:
+        break
+    else:
+        print("Invalid optimizer choice. Please choose from adam, adamax, nadam, or sgd.")
+
+if optimizer_choice == "adam":
+    optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
+elif optimizer_choice == "adamax":
+    optimizer = tf.keras.optimizers.Adamax(learning_rate=learning_rate)
+elif optimizer_choice == "nadam":
+    optimizer = tf.keras.optimizers.Nadam(learning_rate=learning_rate)
+elif optimizer_choice == "sgd":
+    while True:
+       try:
+           momentum_value = float(input("Enter momentum value for SGD (e.g., 0.9): "))
+           if 0 <= momentum_value <= 1:
+                break
+           else:
+               print("Momentum value should be between 0 and 1.")
+       except ValueError:
+           print("Invalid momentum value, please enter a numeric value between 0 and 1")
+    optimizer = tf.keras.optimizers.SGD(learning_rate=learning_rate, momentum=momentum_value)
+
+# Early stopping
+early_stopping = EarlyStopping(monitor='val_loss', patience=15, restore_best_weights=True)
+
+# Train and evaluate
+results = []
+hidden_layers = neurons_per_layer
+activation_funcs = activation_functions
+model = build_model(hidden_layers, activation_funcs, dropout_rate)
+
+# Train with Gradient Descent
+model.compile(optimizer=optimizer, loss='mse')
+history = model.fit(X_train, y_train, epochs=epochs, batch_size=batch_size, verbose=0, validation_data=(X_val, y_val), callbacks=[early_stopping])
+
+
+# Predict
+y_pred_train = model.predict(X_train, verbose=0).flatten()
+y_pred_val = model.predict(X_val, verbose=0).flatten()
+y_pred_test = model.predict(X_test, verbose=0).flatten()
+y_pred_all = model.predict(X, verbose=0).flatten()
+
+
+# Evaluate
+train_metrics = evaluate_regression(y_train, y_pred_train, "Training")
+val_metrics = evaluate_regression(y_val, y_pred_val, "Validation")
+test_metrics = evaluate_regression(y_test, y_pred_test, "Test")
+all_metrics = evaluate_regression(y, y_pred_all, "All Data")
+
+
+# Prepare results for excel
+results.append({
+    "Input Variables": "IRI",
+    "Neurons": neurons_per_layer,
+    "Learning Algorithm": optimizer_choice,
+    "Output Variable": "PCI",
+    "Dropout Rate": dropout_rate,
+    "Activation Functions": activation_functions,
+    "Hidden Layers": number_of_hidden_layers,
+    "Epochs": epochs,
+    "Learning Rate": learning_rate,
+    "Batch Size": batch_size,
+    **train_metrics
+})
+results.append({
+    "Input Variables": "IRI",
+    "Neurons": neurons_per_layer,
+    "Learning Algorithm": optimizer_choice,
+    "Output Variable": "PCI",
+    "Dropout Rate": dropout_rate,
+    "Activation Functions": activation_functions,
+    "Hidden Layers": number_of_hidden_layers,
+    "Epochs": epochs,
+    "Learning Rate": learning_rate,
+    "Batch Size": batch_size,
+    **val_metrics
+})
+results.append({
+    "Input Variables": "IRI",
+    "Neurons": neurons_per_layer,
+    "Learning Algorithm": optimizer_choice,
+    "Output Variable": "PCI",
+     "Dropout Rate": dropout_rate,
+    "Activation Functions": activation_functions,
+    "Hidden Layers": number_of_hidden_layers,
+    "Epochs": epochs,
+    "Learning Rate": learning_rate,
+    "Batch Size": batch_size,
+     **test_metrics
+})
+results.append({
+    "Input Variables": "IRI",
+    "Neurons": neurons_per_layer,
+    "Learning Algorithm": optimizer_choice,
+    "Output Variable": "PCI",
+    "Dropout Rate": dropout_rate,
+    "Activation Functions": activation_functions,
+    "Hidden Layers": number_of_hidden_layers,
+    "Epochs": epochs,
+    "Learning Rate": learning_rate,
+    "Batch Size": batch_size,
+     **all_metrics
+})
+
+
+# Save results to Excel
+results_df = pd.DataFrame(results)
+results_df.to_excel("results.xlsx", index=False)
+
+print("Results saved to results.xlsx")
+
+print("results df    ", results_df)
+
+###########
+
+out1 = scaler_y.inverse_transform(y.reshape(-1,1))
+out2 = scaler_y.inverse_transform(y_pred_all.reshape(-1,1))
+final_mat = np.concatenate((out1,out2), axis=1)
+# print(final_mat)
+final_df = pd.DataFrame(final_mat, columns = ['true value', 'predict'])
+final_df.to_excel("predictions.xlsx", index=False)
+
+
+# Save the model after training
+model.save("trained_model.h5")
+print("Model saved to trained_model.h5")
+
+# Plotting training and validation loss
+plt.figure(figsize=(10, 6))
+plt.plot(history.history['loss'], label='Training Loss')
+plt.plot(history.history['val_loss'], label='Validation Loss')
+plt.title('Training and Validation Loss')
+plt.xlabel('Epochs')
+plt.ylabel('Loss')
+plt.legend()
+plt.grid(True)
+plt.savefig('loss_curve.png')
+plt.show()
+
+# Scatter Plot: True vs Predicted for All Data
+plt.figure(figsize=(10, 6))
+sns.scatterplot(x=scaler_y.inverse_transform(y.reshape(-1, 1)).flatten(), y=scaler_y.inverse_transform(y_pred_all.reshape(-1, 1)).flatten())
+plt.title('Scatter Plot: True vs Predicted Values (All Data)')
+plt.xlabel('True Values')
+plt.ylabel('Predicted Values')
+plt.grid(True)
+plt.plot(scaler_y.inverse_transform(y.reshape(-1, 1)).flatten(), scaler_y.inverse_transform(y.reshape(-1, 1)).flatten(), color='red', linestyle='--') #Added line for perfect prediction.
+plt.savefig('scatter_plot_all.png')
+plt.show()
+
+
+# Error Distribution: Histogram
+errors = scaler_y.inverse_transform(y.reshape(-1, 1)).flatten() - scaler_y.inverse_transform(y_pred_all.reshape(-1, 1)).flatten()
+plt.figure(figsize=(10, 6))
+sns.histplot(errors, kde=True)  # Use kde for a smoother curve
+plt.title('Error Distribution (All Data)')
+plt.xlabel('Prediction Errors')
+plt.ylabel('Frequency')
+plt.grid(True)
+plt.savefig('error_distribution_all.png')
+plt.show()
+
+# Scatter Plot for Train Data
+plt.figure(figsize=(10, 6))
+sns.scatterplot(x=scaler_y.inverse_transform(y_train.reshape(-1, 1)).flatten(), y=scaler_y.inverse_transform(y_pred_train.reshape(-1, 1)).flatten())
+plt.title('Scatter Plot: True vs Predicted Values (Train Data)')
+plt.xlabel('True Values (Train)')
+plt.ylabel('Predicted Values (Train)')
+plt.grid(True)
+plt.plot(scaler_y.inverse_transform(y_train.reshape(-1, 1)).flatten(), scaler_y.inverse_transform(y_train.reshape(-1, 1)).flatten(), color='red', linestyle='--')  # Perfect prediction line
+plt.savefig('scatter_plot_train.png')
+plt.show()
+
+# Scatter Plot for Validation Data
+plt.figure(figsize=(10, 6))
+sns.scatterplot(x=scaler_y.inverse_transform(y_val.reshape(-1, 1)).flatten(), y=scaler_y.inverse_transform(y_pred_val.reshape(-1, 1)).flatten())
+plt.title('Scatter Plot: True vs Predicted Values (Validation Data)')
+plt.xlabel('True Values (Validation)')
+plt.ylabel('Predicted Values (Validation)')
+plt.grid(True)
+plt.plot(scaler_y.inverse_transform(y_val.reshape(-1, 1)).flatten(), scaler_y.inverse_transform(y_val.reshape(-1, 1)).flatten(), color='red', linestyle='--')  # Perfect prediction line
+plt.savefig('scatter_plot_validation.png')
+plt.show()
+
+# Scatter Plot for Test Data
+plt.figure(figsize=(10, 6))
+sns.scatterplot(x=scaler_y.inverse_transform(y_test.reshape(-1, 1)).flatten(), y=scaler_y.inverse_transform(y_pred_test.reshape(-1, 1)).flatten())
+plt.title('Scatter Plot: True vs Predicted Values (Test Data)')
+plt.xlabel('True Values (Test)')
+plt.ylabel('Predicted Values (Test)')
+plt.grid(True)
+plt.plot(scaler_y.inverse_transform(y_test.reshape(-1, 1)).flatten(), scaler_y.inverse_transform(y_test.reshape(-1, 1)).flatten(), color='red', linestyle='--')  # Perfect prediction line
+plt.savefig('scatter_plot_test.png')
+plt.show()
+
+
+# Error Distribution for Train Data
+errors_train = scaler_y.inverse_transform(y_train.reshape(-1, 1)).flatten() - scaler_y.inverse_transform(y_pred_train.reshape(-1, 1)).flatten()
+plt.figure(figsize=(10, 6))
+sns.histplot(errors_train, kde=True)
+plt.title('Error Distribution (Train Data)')
+plt.xlabel('Prediction Errors (Train)')
+plt.ylabel('Frequency')
+plt.grid(True)
+plt.savefig('error_distribution_train.png')
+plt.show()
+
+# Error Distribution for Validation Data
+errors_val = scaler_y.inverse_transform(y_val.reshape(-1, 1)).flatten() - scaler_y.inverse_transform(y_pred_val.reshape(-1, 1)).flatten()
+plt.figure(figsize=(10, 6))
+sns.histplot(errors_val, kde=True)
+plt.title('Error Distribution (Validation Data)')
+plt.xlabel('Prediction Errors (Validation)')
+plt.ylabel('Frequency')
+plt.grid(True)
+plt.savefig('error_distribution_validation.png')
+plt.show()
+
+# Error Distribution for Test Data
+errors_test = scaler_y.inverse_transform(y_test.reshape(-1, 1)).flatten() - scaler_y.inverse_transform(y_pred_test.reshape(-1, 1)).flatten()
+plt.figure(figsize=(10, 6))
+sns.histplot(errors_test, kde=True)
+plt.title('Error Distribution (Test Data)')
+plt.xlabel('Prediction Errors (Test)')
+plt.ylabel('Frequency')
+plt.grid(True)
+plt.savefig('error_distribution_test.png')
+plt.show()
